@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <body>
+    <div id="app">
+      <input v-model="name" type="text" />
+      <p>{{name}}</p>
+      <button v-on:click="clickEvent">点击</button>
+    </div>
+  </body>
+</html>
+<script>
+  /*
+      实现：v-model，v-on,插值渲染（仅支持只有单个插值的文本节点）
+
+      逻辑：创建vue实例=》数据劫持=》dom树渲染，创建对应数据的watcher，添加到watcher数组
+          =》页面更新=》元素绑定的时间触发对应数据的getter=》getter调用对应数据的更新函数，更新页面
+
+  */
+
+  function Watch(vm, value, callback) {
+    //vue实例
+    this.vm = vm
+    //该watcher监听的数据
+    this.value = value
+    this.update = callback
+    this.init()
+  }
+  Watch.prototype = {
+    //watcher创建时，主动去触发对应属性值的getter，并加入vue实例中的watchers
+    init: function () {
+      this.vm.data[this.value]
+      this.vm.watchers[this.value].push(this)
+    },
+  }
+
+  function VueDemo(options) {
+    this.el = document.querySelector(options.el)
+    this.data = options.data
+    this.methods = options.methods
+    this.fragment = null
+    this.watchers = []
+    this.init()
+  }
+  VueDemo.prototype = {
+    init: function () {
+      if (!this.el) {
+        console.log('根元素未找到')
+        return
+      }
+      this.iterateData(this.data)
+      //创建fragment
+      this.fragment = this.createFragment(this.el)
+      //渲染
+      this.compile(this.fragment)
+      this.el.appendChild(this.fragment)
+    },
+    //遍历data
+    iterateData: function (data) {
+      Object.keys(data).forEach((key) => {
+        this.watchers[key] = []
+        this.defineReactive(data, key, data[key])
+      })
+    },
+    //劫持数据
+    defineReactive: function (data, key, val) {
+      let self = this
+      Object.defineProperty(data, key, {
+        get: function () {
+          // console.log(key + ':get')
+          return val
+        },
+        set: function (newValue) {
+          // console.log(key + ':set')
+          self.watchers[key].forEach((watcher) => {
+            watcher.update(newValue)
+          })
+          val = newValue
+        },
+      })
+    },
+    //创建fragment
+    createFragment: function (el) {
+      let fragment = document.createDocumentFragment()
+      while (el.firstChild) {
+        //appedchild是移动而不是复制，才知道
+        fragment.appendChild(el.firstChild)
+      }
+      return fragment
+    },
+    //解析dom树
+    compile(el) {
+      /*
+        遍历节点
+            判断节点类型
+                元素类型
+                    判断是否绑定了事件或者指令
+                文本类型
+                    判断是否含有文本差值
+        */
+      Array.prototype.slice.call(el.childNodes).forEach((node) => {
+        let info = this.checkout(node)
+        //如果是元素类型，判断是否有事件或者指令
+        if (info.isElementNode && info.isDirective) {
+          //事件指令
+          if (info.isEventDirective) {
+            info.events.forEach((event) => {
+              this.compileEvent(node, event.name, event.value)
+            })
+            //v-model指令
+          } else if (info.isModelDirective) {
+            this.compileModel(node, info.modelName)
+          }
+          //如果是文本，判断是否有插值
+        } else if (info.isTextNode && info.hasInterpolation) {
+          //渲染插值
+          this.compileText(node, info.interpolation.name)
+        }
+        if (info.hasChildNodes) {
+          this.compile(node)
+        }
+      })
+    },
+    //渲染绑定事件的节点
+    compileEvent: function (node, eventName, eventValue) {
+      node.addEventListener(eventName, this.methods[eventValue])
+    },
+    //渲染带有v-model的节点
+    compileModel: function (node, modelValue) {
+      //绑定v-mdel
+      let self = this
+      new Watch(self, modelValue, function (value) {
+        // console.log("model");
+        self.updateModel(node, value)
+      })
+      node.addEventListener('input', (e) => {
+        if (e.target.value == this.data[modelValue]) return
+        console.log(e.target.value)
+        this.data[modelValue] = e.target.value
+      })
+      this.updateModel(node, this.data[modelValue])
+    },
+    //带有v-model的节点的更新方法
+    updateModel: function (node, value) {
+      node.value = value
+    },
+    //渲染文本节点
+    compileText: function (node, interpolation) {
+      //正则不会，先单个替换
+      this.updateText(node, this.data[interpolation])
+      let self = this
+      new Watch(self, interpolation, function (value) {
+        // console.log("text");
+        self.updateText(node, value)
+      })
+    },
+    //文本节点更新方法
+    updateText: function (node, value) {
+      node.nodeValue = value
+    },
+    //处理dom节点的信息，返回信息数组
+    checkout: function (node) {
+      let info = {
+        //节点类型
+        isElementNode: false,
+        isTextNode: false,
+        //是否有指令
+        isDirective: false,
+        //指令数组
+        directives: [],
+
+        //是否有事件指令
+        isEventDirective: false,
+        //事件数组
+        events: [],
+        //是否有v-model指令
+        isModelDirective: false,
+        modelName: '',
+        //是否有差值
+        hasInterpolation: false,
+        interpolation: { name: '' },
+        //是否有子节点
+        hasChildNodes: false,
+      }
+      if (node.nodeType == 1) {
+        info.isElementNode = true
+        Array.prototype.slice.call(node.attributes).forEach((attr) => {
+          if (attr.name.indexOf('v-') != -1) {
+            info.isDirective = true
+            info.directives.push({ name: attr.name, value: attr.value })
+          }
+          if (attr.name.indexOf('v-on') != -1) {
+            info.isEventDirective = true
+            info.events.push({
+              name: attr.name.split(':')[1],
+              value: attr.value,
+            })
+          }
+          if (attr.name.indexOf('v-model') != -1) {
+            info.isModelDirective = true
+            info.modelName = attr.value
+          }
+        })
+      } else if (node.nodeType == 3) {
+        info.isTextNode = true
+        var reg = /\{\{(.*)\}\}/
+        if (reg.test(node.nodeValue)) {
+          info.hasInterpolation = true
+          info.interpolation.name = reg.exec(node.nodeValue)[1]
+        }
+      }
+      if (node.childNodes.length != 0) {
+        info.hasChildNodes = true
+      }
+      return info
+    },
+  }
+
+  let demo = new VueDemo({
+    el: '#app',
+    data: {
+      name: '张二狗',
+    },
+    methods: {
+      clickEvent: function () {
+        alert('click')
+      },
+    },
+  })
+</script>
